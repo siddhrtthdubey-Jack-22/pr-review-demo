@@ -1,0 +1,60 @@
+name: AI Agent PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  ai-agent:
+    name: Run AI agent
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install agent dependencies
+        run: pip install -r ai-agent/requirements.txt
+
+      - name: Run agent unit tests
+        run: python -m pytest ai-agent/test_app.py -q
+
+      - name: Fetch base branch
+        run: git fetch origin "${{ github.base_ref }}" --depth=50
+
+      - name: Run AI agent
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_BASE_REF: origin/${{ github.base_ref }}
+        run: python ai-agent/cli.py --pr --component-name "${{ github.event.pull_request.head.ref }}"
+
+      - name: Comment review on PR
+        if: always() && hashFiles('ai-agent-results.json') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("ai-agent-results.json").read_text(encoding="utf-8"))
+          details = data.get("details", {})
+          parts = ["## AI Agent workflow", ""]
+          for key, value in details.items():
+              parts.append(f"### {key}")
+              parts.append("")
+              parts.append(str(value)[:6000])
+              parts.append("")
+          Path("pr-comment.md").write_text("\n".join(parts), encoding="utf-8")
+          PY
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file pr-comment.md
